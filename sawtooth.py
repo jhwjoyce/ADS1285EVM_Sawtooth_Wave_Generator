@@ -46,22 +46,20 @@ class ADS1285EVMController:
     def __init__(self):
         """Initialize the ADS1285EVM controller"""
         # Initialize SPI
-        self.spi = getSpiDev()
+        self.spi = spidev.SpiDev()
         self.spi.open(SPI_BUS, SPI_DEVICE)
         self.spi.max_speed_hz = SPI_SPEED
         self.spi.mode = 1  # SPI mode 1 (CPOL=0, CPHA=1)
-        
-        # Initialize GPIO
-        if is_gpio_module_imported():
-            GPIO.setmode(GPIO.BOARD)
-            GPIO.setup(CS_PIN, GPIO.OUT)
-            GPIO.setup(RESET_PIN, GPIO.OUT)
-            GPIO.setup(START_PIN, GPIO.OUT)
-            
-            # Set initial pin states
-            GPIO.output(CS_PIN, GPIO.HIGH)     # CS inactive
-            GPIO.output(RESET_PIN, GPIO.HIGH)  # Reset inactive
-            GPIO.output(START_PIN, GPIO.LOW)   # START inactive
+
+        GPIO.setmode(GPIO.BOARD)
+        GPIO.setup(CS_PIN, GPIO.OUT)
+        GPIO.setup(RESET_PIN, GPIO.OUT)
+        GPIO.setup(START_PIN, GPIO.OUT)
+
+        # Set initial pin states
+        GPIO.output(CS_PIN, GPIO.HIGH)     # CS inactive
+        GPIO.output(RESET_PIN, GPIO.HIGH)  # Reset inactive
+        GPIO.output(START_PIN, GPIO.LOW)   # START inactive
             
         # Current DAC value
         self.current_dac_value = SAWTOOTH_MIN_VAL
@@ -77,11 +75,9 @@ class ADS1285EVMController:
     
     def reset_device(self):
         """Reset the ADS1285EVM"""
-        if is_gpio_module_imported():
-            GPIO.output(RESET_PIN, GPIO.LOW)
+        GPIO.output(RESET_PIN, GPIO.LOW)
         time.sleep(0.1)  # 100ms reset pulse
-        if is_gpio_module_imported():
-            GPIO.output(RESET_PIN, GPIO.HIGH)
+        GPIO.output(RESET_PIN, GPIO.HIGH)
         time.sleep(0.1)  # Wait for device to stabilize
     
     def init_dac(self):
@@ -93,8 +89,7 @@ class ADS1285EVMController:
     
     def write_register(self, addr, value):
         """Write to a register on the ADS1285"""
-        if is_gpio_module_imported():
-            GPIO.output(CS_PIN, GPIO.LOW)  # Assert CS
+        GPIO.output(CS_PIN, GPIO.LOW)  # Assert CS
         
         # Send command byte (write command: 0x5X where X is the register address)
         self.spi.xfer2([0x50 | (addr & 0x0F)])
@@ -102,8 +97,7 @@ class ADS1285EVMController:
         # Send data byte
         self.spi.xfer2([value])
         
-        if is_gpio_module_imported():
-            GPIO.output(CS_PIN, GPIO.HIGH)  # Deassert CS
+        GPIO.output(CS_PIN, GPIO.HIGH)  # Deassert CS
     
     def write_dac(self, value):
         """Write value to the DAC"""
@@ -111,15 +105,13 @@ class ADS1285EVMController:
         msb = (value >> 8) & 0xFF  # Extract MSB (bits 8-15)
         lsb = value & 0xFF         # Extract LSB (bits 0-7)
         
-        if is_gpio_module_imported():
-            GPIO.output(CS_PIN, GPIO.LOW)  # Assert CS
+        GPIO.output(CS_PIN, GPIO.LOW)  # Assert CS
         
         # Send command byte for DAC write (assumed to be 0x70)
         # Then send 16-bit data (MSB first)
         self.spi.xfer2([0x70, msb, lsb])
         
-        if is_gpio_module_imported():
-            GPIO.output(CS_PIN, GPIO.HIGH)  # Deassert CS
+        GPIO.output(CS_PIN, GPIO.HIGH)  # Deassert CS
     
     def generate_sawtooth(self):
         """Generate a single sawtooth cycle"""
@@ -175,23 +167,32 @@ def signal_handler(sig, frame):
         controller.cleanup()
     sys.exit(0)
 
-def is_gpio_module_imported():
-    return 'GPIO' in sys.modules
+# Detect if RPi.GPIO is imported to determine if running on Raspberry Pi
+def is_rpi_gpio_module_imported():
+    return 'RPi.GPIO' in sys.modules
 
 # Ensure spidev is available for testing on non-RPi systems
-def getSpiDev():
-    if 'Mock' in sys.modules:
-        # Create a mock spidev object
-        mock_spi = MagicMock(spec=spidev.SpiDev)
+def mockSpiDev():
+    # replace SpiDev with the mock
+    mock_spi = MagicMock(spec=spidev.SpiDev)
+    spidev.SpiDev = MagicMock(return_value=mock_spi)
 
-        # replace SpiDev with the mock
-        spidev.SpiDev = MagicMock(return_value=mock_spi)
-    return spidev.SpiDev()
+# Ensure GPIO is available for testing on non-RPi systems
+def mockGPIO():
+    GPIO.setmode = MagicMock()
+    GPIO.setup = MagicMock()
+    GPIO.output = MagicMock()
+    GPIO.cleanup = MagicMock()
 
 if __name__ == "__main__":
     # Register signal handler for Ctrl+C
     signal.signal(signal.SIGINT, signal_handler)
     
+    # Mock spidev and GPIO if not running on Raspberry Pi
+    if not is_rpi_gpio_module_imported():
+        mockGPIO()
+        mockSpiDev()
+
     try:
         # Create ADS1285EVM controller
         controller = ADS1285EVMController()
